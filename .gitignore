@@ -1,0 +1,39 @@
+# Secrets and local state
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+*secret*
+!scripts/check-secrets.sh
+*.sqlite
+*.sqlite3
+*.db
+
+# External AI logs must never be copied in
+claude-logs/
+codex-logs/
+zcode-db/
+
+# Test code stays off GitHub. Do not git add -f these.
+tests/
+test/
+__tests__/
+fixtures/
+testdata/
+*.test.ts
+*.test.tsx
+*.test.js
+*.spec.ts
+*.spec.tsx
+*.spec.js
+*_test.rs
+*_test.go
+
+# Tooling
+node_modules/
+dist/
+target/
+.DS_Store
