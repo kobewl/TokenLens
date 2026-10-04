@@ -46,7 +46,7 @@ Versions before 0.3.0 do not contain the updater; install 0.3.0 manually once. L
 Release bundles require the matching signing key:
 
 ```bash
-TAURI_SIGNING_PRIVATE_KEY_PATH=/absolute/path/to/signing.key npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg -- --locked
+TAURI_SIGNING_PRIVATE_KEY=/absolute/path/to/signing.key npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg -- --locked
 ```
 
 For an unsigned preview, pass a JSON override disabling updater artifacts:
