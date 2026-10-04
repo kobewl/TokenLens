@@ -28,7 +28,7 @@ const STATUS: Record<string, string> = { counted: "已采集", partial: "部分�
 const format = (n: number) => new Intl.NumberFormat("zh-CN").format(n);
 const date = (ts: string) => new Date(ts).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" });
 const lines = (s: string) => s.split("\n").map(s => s.trim()).filter(Boolean);
-export default function Management({ page, sources, revision, onUsage, onMemory }: { page: "tools" | "memory"; sources: Source[]; revision: number; onUsage: (app: string) => void; onMemory: () => void }) {
+export default function Management({ page, sources, revision, onUsage, onMemory, onTools }: { page: "hub" | "tools" | "memory"; sources: Source[]; revision: number; onUsage: (app: string) => void; onMemory: () => void; onTools: () => void }) {
   const desktop = isTauri();
   const [projects, setProjects] = useState<Project[]>([]);
   const [root, setRoot] = useState("");
@@ -63,17 +63,17 @@ export default function Management({ page, sources, revision, onUsage, onMemory 
     return () => { active = false; };
   }, [desktop, version]);
   useEffect(() => {
-    if (!desktop || page !== "tools") return;
+    if (!desktop || (page !== "tools" && page !== "hub")) return;
     let active = true;
     void invoke<Totals>("overview", { range: "all", app: null, provider: null, model: null }).then(t => { if (active) setTotals(t); }).catch(e => { if (active) setError(String(e)); });
     return () => { active = false; };
   }, [desktop, page, revision]);
   useEffect(() => {
     const id = ++generation.current; setMemory(null); setError("");
-    if (!desktop || !root || page !== "memory") { setLoading(false); return; }
+    if (!desktop || !root || (page !== "memory" && page !== "hub")) { setLoading(false); return; }
     setLoading(true);
     const timer = setTimeout(() => {
-      void invoke<Memory>("project_memory", { root, query }).then(m => { if (id === generation.current) setMemory(m); }).catch(e => { if (id === generation.current) setError(String(e)); }).finally(() => { if (id === generation.current) setLoading(false); });
+      void invoke<Memory>("project_memory", { root, query: page === "hub" ? "" : query }).then(m => { if (id === generation.current) setMemory(m); }).catch(e => { if (id === generation.current) setError(String(e)); }).finally(() => { if (id === generation.current) setLoading(false); });
     }, 120);
     return () => { clearTimeout(timer); generation.current++; };
   }, [desktop, root, query, page, version, revision]);
@@ -106,8 +106,21 @@ export default function Management({ page, sources, revision, onUsage, onMemory 
   return <div className="management">
     {error && <p className="error" role="alert">{error}</p>}{message && <p className="notice" role="status">{message}</p>}
     {!desktop && <p className="notice">浏览器预览 · 请在桌面应用中添加本机项目、采集用量和写入记忆。</p>}
-    {page === "tools" ? <>
-      <section className="hub-intro"><div><span className="eyebrow">你的 AI 工作台</span><h2>工具各有所长，项目记忆一起延续。</h2><p>集中查看工具覆盖与用量，把进度、决策和下一步交给同一份项目记忆。</p></div><button className="outline" onClick={onMemory}>查看项目记忆 →</button></section>
+    {page === "hub" ? <>
+      <section className="command-banner"><div><span className="eyebrow">TOKENLENS / AI EDITOR HUB</span><h2>换个工具，接着推进。</h2><p>项目、交接与决策，在这里连成一条工作线。</p><button className="outline primary" disabled={!desktop || busy} onClick={addProject}>＋ 添加项目</button></div><div className="handoff-orbit" aria-hidden="true"><span>⌘ IDE</span><i>↘</i><strong>◈<small>项目记忆</small></strong><i>↗</i><span>CLI ⌁</span></div></section>
+      <div className="command-layout"><div className="command-main">
+        <section className="workspace-panel"><div className="panel-title"><div><span className="eyebrow">PROJECTS</span><h3>项目工作区 <small>{projects.length}</small></h3></div><button className="text-action" onClick={onMemory}>管理项目 →</button></div>
+          {projects.length ? <><div className="project-switcher">{projects.map(p => <button key={p.root} className={root === p.root ? "active" : ""} onClick={() => { setRoot(p.root); setQuery(""); }}><span className="folder-mark">⌑</span><strong>{p.name}</strong><small title={p.root}>{p.root}</small></button>)}</div><div className="project-resume"><span className="eyebrow">当前项目 / {project?.name}</span><h3>{loading ? "正在读取交接…" : memory?.events[0]?.summary ?? "给下一次工作留一个起点"}</h3><p>{memory?.events[0] ? `上次记录来自 ${TOOLS.find(t => t.id === memory.events[0].tool)?.name ?? memory.events[0].tool} · ${date(memory.events[0].ts)}` : "写下进度和下一步，让其他编辑器接着完成。"}</p><div className="resume-actions"><button className="outline primary" disabled={!memory || loading} onClick={() => void copy(memory!.brief)}>复制交接简报</button><button className="outline" disabled={busy} onClick={() => openForm("handoff")}>写交接</button><button className="text-action" onClick={onMemory}>查看完整记忆 →</button></div></div></> : <div className="workspace-onboarding"><span className="folder-mark">⌑</span><h3>把第一个项目带进来</h3><p>选择项目目录，集中保存交接、下一步和决策。</p><button className="outline" disabled={!desktop || busy} onClick={addProject}>选择项目目录 →</button></div>}
+        </section>
+        <section className="workspace-panel"><div className="panel-title"><div><span className="eyebrow">NEXT UP</span><h3>接下来做什么</h3></div>{project && <button className="text-action" onClick={onMemory}>交接历史 →</button>}</div>{loading ? <p className="panel-empty">正在读取…</p> : memory?.events[0]?.next.length ? <ol className="next-queue">{memory.events[0].next.map((item,i) => <li key={i}><span>{String(i+1).padStart(2,"0")}</span><p>{item}</p></li>)}</ol> : <p className="panel-empty">{project ? "最新交接还没有下一步。写交接时留下待办，方便切换工具后继续。" : "添加项目后，这里会显示最新交接中的下一步。"}</p>}</section>
+      </div><aside className="command-rail">
+        <section className="workspace-panel"><div className="panel-title"><div><span className="eyebrow">YOUR TOOLCHAIN</span><h3>工具与接入</h3></div><button className="text-action" onClick={onTools}>全部 →</button></div><div className="toolchain-list">{TOOLS.slice(0,5).map(t => { const source=sources.find(s=>s.app===t.id); return <button key={t.id} onClick={onTools}><span className={`tool-symbol symbol-${t.id}`}>{t.mark}</span><span><strong>{t.name}</strong><small>{source ? STATUS[source.coverage] ?? source.coverage : "未检测用量"}</small></span><span className="tool-kind">{t.kind}</span></button>; })}</div><button className="outline rail-connect" disabled={!project || busy} onClick={() => openForm("connect")}>为当前项目接入工具 ↗</button><p className="rail-note">用量状态来自本机记录；目录不表示已安装或已连接。</p></section>
+        <section className="usage-glance"><span className="eyebrow">USAGE / ALL TIME</span><h3>{format(totals?.totalTokens ?? 0)} <small>Tokens</small></h3><p>{format(totals?.eventCount ?? 0)} 次请求 · {sources.filter(s=>s.events>0).length} 个工具有记录</p><button className="text-action" onClick={() => onUsage("")}>查看用量统计 →</button></section>
+        <div className="local-workflow"><span>◈ 本地工作流</span><p>一份项目记忆，多个工具接棒。交接由你或接入的工具明确写入。</p></div>
+      </aside></div>
+    </> : page === "tools" ? <>
+
+      <section className="hub-intro"><div><span className="eyebrow">你的 AI 工作台</span><h2>你的工具链，各就各位。</h2><p>集中查看工具覆盖与用量，把进度、决策和下一步交给同一份项目记忆。</p></div><button className="outline" onClick={onMemory}>查看项目记忆 →</button></section>
       <div className="hub-stats"><article><span>工具目录</span><strong>{TOOLS.length}</strong><small>CLI · IDE · 桌面</small></article><article><span>已有用量的工具</span><strong>{sources.filter(s => s.events > 0).length}</strong><small>来自本机可核对的记录</small></article><article><span>累计 Token</span><strong>{format(totals?.totalTokens ?? 0)}</strong><small>{format(totals?.eventCount ?? 0)} 次请求</small></article><article><span>已管理项目</span><strong>{projects.length}</strong><small>每个项目独立存放记忆</small></article></div>
       <div className="hub-toolbar"><div className="segments">{["全部", "CLI", "IDE", "桌面"].map(c => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div><input aria-label="搜索 AI 工具" placeholder="搜索工具或用途" value={keyword} onChange={e => setKeyword(e.target.value)} /></div>
       <div className="tool-grid">{filtered.map(t => { const source = sources.find(s => s.app === t.id); const tokens = totals?.byApp.find(a => a.name === t.name)?.totalTokens; return <article className="tool-card" key={t.id}><div className="tool-card-head"><span className="tool-symbol">{t.mark}</span><div><h3>{t.name}</h3><span>{t.kind}</span></div><span className={`coverage-status ${source?.coverage ?? ""}`}>{source ? STATUS[source.coverage] ?? source.coverage : "未检测用量"}</span></div><p>{t.about}</p><div className="tool-usage"><strong>{tokens === undefined ? "—" : format(tokens)}</strong><span>累计 Token</span></div><p className="tool-detail">{source?.detail ?? "暂无可核对的本机用量。记忆接入可从项目页配置。"}</p><div className="tool-card-actions"><button className="outline" disabled={!source?.events} onClick={() => onUsage(t.id)}>查看用量</button><button className="outline" onClick={onMemory}>{t.memory ? "接入项目记忆" : "查看交接简报"}</button></div></article>; })}</div>

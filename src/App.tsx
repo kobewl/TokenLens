@@ -165,7 +165,7 @@ function AppMark({ id }: { id: string }) {
   );
 }
 export default function App() {
-  const [view, setView] = useState<"usage" | "tools" | "memory">("tools");
+  const [view, setView] = useState<"hub" | "usage" | "tools" | "memory">("hub");
   const [range, setRange] = useState("today");
   const [app, setApp] = useState("");
   const [provider, setProvider] = useState("");
@@ -366,36 +366,15 @@ export default function App() {
             <Icon name={collapsed ? "chevron" : "back"} size={16} />
           </button>
         </div>
+        <nav className="workspace-nav" aria-label="工作台导航">
+          {!collapsed && <span className="nav-label">WORKSPACE</span>}
+          {([{ id: "hub", label: "工作台", icon: "chart" }, { id: "tools", label: "工具总览", icon: "database" }, { id: "memory", label: "项目记忆", icon: "database" }, { id: "usage", label: "用量统计", icon: "chart" }] as const).map(item => <button key={item.id} title={item.label} aria-current={view === item.id ? "page" : undefined} className={view === item.id ? "selected" : ""} onClick={() => item.id === "usage" ? selectApp("") : setView(item.id)}><Icon name={item.icon} />{!collapsed && <span>{item.label}</span>}</button>)}
+        </nav>
         <nav className="app-nav" aria-label="应用筛选">
-          {visibleApps.map((a) => (
-            <button
-              key={a.id}
-              className={app === a.id ? "selected" : ""}
-              onClick={() => selectApp(app === a.id ? "" : a.id)}
-              title={a.name}
-              aria-pressed={app === a.id}
-            >
-              <AppMark id={a.id} />
-              {!collapsed && <span>{a.name}</span>}
-            </button>
-          ))}
+          {!collapsed && <span className="nav-label">用量快捷入口</span>}
+          {visibleApps.map(a => <button key={a.id} className={view === "usage" && app === a.id ? "selected" : ""} onClick={() => selectApp(app === a.id ? "" : a.id)} title={a.name} aria-pressed={view === "usage" && app === a.id}><AppMark id={a.id} />{!collapsed && <span>{a.name}</span>}</button>)}
         </nav>
         <div className="sidebar-bottom">
-          <button className={view === "tools" ? "selected" : ""} onClick={() => setView("tools")} title="工具总览"><Icon name="database" />{!collapsed && <span>工具总览</span>}</button>
-          <button className={view === "memory" ? "selected" : ""} onClick={() => setView("memory")} title="项目记忆"><Icon name="chart" />{!collapsed && <span>项目记忆</span>}</button>
-          <button
-            className={view === "usage" ? "selected" : ""}
-            onClick={() => selectApp("")}
-            title="用量统计"
-          >
-            <Icon name="chart" />
-            {!collapsed && (
-              <>
-                <span>用量统计</span>
-                {hasData && <small>{compact(overview!.totalTokens)}</small>}
-              </>
-            )}
-          </button>
           <button onClick={() => setDialog("sources")} title="数据来源">
             <Icon name="database" />
             {!collapsed && <span>数据来源</span>}
@@ -413,7 +392,7 @@ export default function App() {
         <header className="topbar">
           <h1>
             <Icon name="chart" size={24} />
-            {{ usage: "用量统计", tools: "工具总览", memory: "项目记忆" }[view]}{" "}
+            {{ hub: "工作台", usage: "用量统计", tools: "工具总览", memory: "项目记忆" }[view]}{" "}
             <span title="本机用量与项目记忆统一管理，记忆由你或接入工具显式写入。">
               <Icon name="help" size={16} />
             </span>
@@ -855,7 +834,7 @@ export default function App() {
           <footer>
             TokenLens <span>本机统计可能与供应商账单存在差异</span>
           </footer>
-          </> : <Management page={view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => setView("memory")} />}
+          </> : <Management page={view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => setView("memory")} onTools={() => setView("tools")} />}
         </div>
       </main>
       {dialog && (

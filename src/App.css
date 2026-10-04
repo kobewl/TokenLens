@@ -1054,3 +1054,28 @@ footer {
 .clear-confirm p { margin: 8px 0 14px; color: var(--muted); line-height: 1.6; }
 .clear-confirm > div { display: flex; justify-content: flex-end; gap: 10px; }
 .setting-row > div { padding-right: 16px; }
+/* Workspace shell */
+:root { --bg:#f6f7f9; --card:#fff; --sidebar:#fbfcfd; --fg:#202733; --muted:#657284; --accent:#4566dd; --selected:#eaf0ff; --line:#e3e8ef; }
+:root[data-theme="dark"] { --bg:#141921; --card:#1c2330; --sidebar:#171e29; --fg:#e7edf7; --muted:#9ba9bc; --accent:#91aaff; --selected:#293955; --line:#303b4d; }
+@media(prefers-color-scheme:dark) { :root[data-theme="system"] { --bg:#141921; --card:#1c2330; --sidebar:#171e29; --fg:#e7edf7; --muted:#9ba9bc; --accent:#91aaff; --selected:#293955; --line:#303b4d; } }
+.shell { grid-template-columns:218px minmax(0,1fr); }
+.brand { border-bottom:0; margin-bottom:24px; }
+.brand strong { font-size:18px; }
+.brand-mark { background:#4566dd; color:#fff; border-radius:10px; width:32px; height:32px; display:grid; place-items:center; font-size:24px; }
+.workspace-nav { display:flex; flex-direction:column; gap:5px; margin-bottom:28px; }
+.nav-label { font-size:10px; color:var(--muted); letter-spacing:.12em; padding:0 12px 10px; }
+.workspace-nav button { display:flex; align-items:center; gap:12px; padding:12px; border-radius:8px; text-align:left; font-size:13px; }
+.workspace-nav button.selected { background:var(--selected); color:var(--accent); font-weight:650; }
+.app-nav button,.sidebar-bottom>button { font-size:12px; }
+.app-nav .app-mark { font-size:20px; }
+.collapsed .workspace-nav button { justify-content:center; }
+.topbar { min-height:72px; padding:16px 30px; background:var(--card); flex-wrap:wrap; }
+.topbar h1 { font-size:16px; gap:10px; }
+.topbar h1>svg { width:18px; }
+.header-tools { gap:12px; font-size:11px; flex-wrap:wrap; }
+.header-tools .outline,.header-tools select { font-size:11px; }
+.content { padding:28px 30px; }
+.outline { border-color:var(--line); background:var(--card); font-size:12px; }
+button.primary { background:#4566dd; color:#fff; border-color:#4566dd; }
+button.primary:hover:not(:disabled) { background:#3553c3; }
+@media(max-width:1000px) { .shell { grid-template-columns:190px minmax(0,1fr); } .content {padding:22px;} .topbar {padding:16px 22px;} .header-tools {gap:8px;} .sync-status {font-size:10px;} }
