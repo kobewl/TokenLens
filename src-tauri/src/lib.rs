@@ -1,6 +1,9 @@
 mod db;
+mod mcp;
+mod memory;
 mod model;
 mod stats;
+pub use mcp::run_mcp;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,6 +79,128 @@ async fn export_usage(
     .map_err(|_| "导出任务失败".to_string())?
 }
 
+#[tauri::command]
+async fn list_projects(state: tauri::State<'_, AppState>) -> Result<Vec<memory::Project>, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || memory::projects(&db::open_reader(&path)?))
+        .await
+        .map_err(|_| "项目查询失败".to_string())?
+}
+#[tauri::command]
+async fn add_project(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<memory::Project>, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(folder) = app
+            .dialog()
+            .file()
+            .set_title("选择项目目录")
+            .blocking_pick_folder()
+        else {
+            return Ok(None);
+        };
+        let folder = folder.into_path().map_err(|_| "目录无效".to_string())?;
+        Ok(Some(memory::register(&db::open(&path)?, &folder)?))
+    })
+    .await
+    .map_err(|_| "添加项目失败".to_string())?
+}
+#[tauri::command]
+async fn forget_project(state: tauri::State<'_, AppState>, root: String) -> Result<(), String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || memory::forget(&db::open(&path)?, &root))
+        .await
+        .map_err(|_| "移除项目失败".to_string())?
+}
+#[tauri::command]
+async fn project_memory(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    query: String,
+) -> Result<memory::Snapshot, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = memory::registered(&db::open_reader(&path)?, &root)?;
+        memory::snapshot(std::path::Path::new(&project.root), &query)
+    })
+    .await
+    .map_err(|_| "读取记忆失败".to_string())?
+}
+#[tauri::command]
+async fn write_handoff(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    input: memory::HandoffInput,
+) -> Result<memory::WriteResult, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = memory::registered(&db::open_reader(&path)?, &root)?;
+        memory::handoff(std::path::Path::new(&root), input, project.guidance)
+    })
+    .await
+    .map_err(|_| "交接写入失败".to_string())?
+}
+#[tauri::command]
+async fn write_decision(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    input: memory::DecisionInput,
+) -> Result<memory::WriteResult, String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = memory::registered(&db::open_reader(&path)?, &root)?;
+        memory::add_decision(std::path::Path::new(&root), input, project.guidance)
+    })
+    .await
+    .map_err(|_| "决策写入失败".to_string())?
+}
+#[tauri::command]
+async fn rebuild_memory(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    enable_guidance: bool,
+) -> Result<(), String> {
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open(&path)?;
+        let project = memory::registered(&conn, &root)?;
+        memory::rebuild(
+            std::path::Path::new(&root),
+            project.guidance || enable_guidance,
+        )?;
+        if enable_guidance {
+            conn.execute(
+                "UPDATE managed_projects SET guidance=1 WHERE root=?1",
+                [&root],
+            )
+            .map_err(|_| "无法保存接入设置".to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "重建记忆失败".to_string())?
+}
+#[tauri::command]
+async fn memory_config(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    tool: String,
+) -> Result<String, String> {
+    if tool.trim().is_empty() || tool.chars().count() > 80 {
+        return Err("工具名无效".into());
+    }
+    let path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = memory::registered(&db::open_reader(&path)?, &root)?;
+        let executable =
+            std::env::current_exe().map_err(|_| "无法定位 TokenLens 可执行文件".to_string())?;
+        memory::mcp_config(&executable, &project.root, &tool, project.guidance)
+    })
+    .await
+    .map_err(|_| "配置生成失败".to_string())?
+}
 // Commands must yield before doing filesystem or SQLite work: synchronous
 // Tauri commands execute on the window thread.
 #[tauri::command]
@@ -144,7 +269,15 @@ pub fn run() {
             refresh,
             overview,
             export_usage,
-            clear_usage
+            clear_usage,
+            list_projects,
+            add_project,
+            forget_project,
+            project_memory,
+            write_handoff,
+            write_decision,
+            rebuild_memory,
+            memory_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,7 +12,9 @@ The local proxy may see `Authorization` only in memory while forwarding a reques
 
 ## Never commit sensitive content
 
-Default storage is usage metadata only: token counts, model, time, app, project, cost, latency, and non-body session ids.
+Default usage storage is metadata only: token counts, model, time, app, project, cost, latency, and non-body session ids.
+
+Explicit project-memory features may store user- or agent-authored handoff summaries and decision rationale in the selected project’s `.memory/baton.db`. This is separate from collector storage. Never automatically import prompts, responses, private tool memories, or credentials into these records. Project memory databases, generated handoff files, and copied design documents must stay out of this public repository. AGENTS.md changes require the user’s explicit project-level opt-in.
 
 Do not commit prompts, model responses, source code from other projects, copied logs, or database files from `~/.claude`, `~/.codex`, or `~/.zcode`.
 

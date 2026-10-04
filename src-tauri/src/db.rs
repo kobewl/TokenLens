@@ -13,6 +13,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
         "
         PRAGMA journal_mode = WAL;
         PRAGMA secure_delete = ON;
+        CREATE TABLE IF NOT EXISTS managed_projects (root TEXT PRIMARY KEY, name TEXT NOT NULL, guidance INTEGER NOT NULL DEFAULT 0 CHECK(guidance IN (0,1)));
         CREATE TABLE IF NOT EXISTS usage_events (
             request_id TEXT PRIMARY KEY,
             timestamp_ms INTEGER NOT NULL,

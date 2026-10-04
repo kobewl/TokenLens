@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
+import Management from "./Management";
 
 type NamedTotal = {
   name: string;
@@ -164,6 +165,7 @@ function AppMark({ id }: { id: string }) {
   );
 }
 export default function App() {
+  const [view, setView] = useState<"usage" | "tools" | "memory">("tools");
   const [range, setRange] = useState("today");
   const [app, setApp] = useState("");
   const [provider, setProvider] = useState("");
@@ -304,6 +306,7 @@ export default function App() {
     finally { setDataBusy(false); refreshLock.current = false; }
   }
   function selectApp(id: string) {
+    setView("usage");
     setApp(id);
     setProvider("");
     setModel("");
@@ -378,8 +381,10 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
+          <button className={view === "tools" ? "selected" : ""} onClick={() => setView("tools")} title="工具总览"><Icon name="database" />{!collapsed && <span>工具总览</span>}</button>
+          <button className={view === "memory" ? "selected" : ""} onClick={() => setView("memory")} title="项目记忆"><Icon name="chart" />{!collapsed && <span>项目记忆</span>}</button>
           <button
-            className="selected"
+            className={view === "usage" ? "selected" : ""}
             onClick={() => selectApp("")}
             title="用量统计"
           >
@@ -408,8 +413,8 @@ export default function App() {
         <header className="topbar">
           <h1>
             <Icon name="chart" size={24} />
-            用量统计{" "}
-            <span title="统计来自本机可读取的用量记录，可能与供应商账单不同。">
+            {{ usage: "用量统计", tools: "工具总览", memory: "项目记忆" }[view]}{" "}
+            <span title="本机用量与项目记忆统一管理，记忆由你或接入工具显式写入。">
               <Icon name="help" size={16} />
             </span>
           </h1>
@@ -440,9 +445,9 @@ export default function App() {
               <option value={30}>自动刷新 30 秒</option>
               <option value={60}>自动刷新 60 秒</option>
             </select>
-            <button className="outline" onClick={() => void exportUsage()} disabled={!desktop || dataBusy || loading || !hasData}>
+            {view === "usage" && <button className="outline" onClick={() => void exportUsage()} disabled={!desktop || dataBusy || loading || !hasData}>
               {dataBusy ? "处理中…" : "导出元数据"}
-            </button>
+            </button>}
             <button
               className="source-button"
               onClick={() => setDialog("sources")}
@@ -452,7 +457,8 @@ export default function App() {
             </button>
           </div>
         </header>
-        <div className="content" aria-busy={loading}>
+        <div className="content" aria-busy={view === "usage" && loading}>
+          {view === "usage" ? <>
           {!desktop && (
             <p className="notice">
               浏览器预览 · 在 TokenLens 桌面应用中查看本机真实用量。
@@ -849,6 +855,7 @@ export default function App() {
           <footer>
             TokenLens <span>本机统计可能与供应商账单存在差异</span>
           </footer>
+          </> : <Management page={view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => setView("memory")} />}
         </div>
       </main>
       {dialog && (
