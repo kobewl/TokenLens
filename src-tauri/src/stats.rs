@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
@@ -113,29 +114,11 @@ pub fn overview(
     provider_filter: &str,
     model_filter: &str,
 ) -> Result<Overview, String> {
-    let now = Local::now();
-    let (start_ms, bucket_kind) = match range {
-        "7d" => (
-            local_day_start(now.date_naive() - Duration::days(6))?,
-            "day",
-        ),
-        "30d" => (
-            local_day_start(now.date_naive() - Duration::days(29))?,
-            "day",
-        ),
-        "all" => (0, "day"),
-        _ => (local_day_start(now.date_naive())?, "hour"),
-    };
-    let range_key = if matches!(range, "7d" | "30d" | "all") {
-        range
-    } else {
-        "today"
-    };
+    let (start_ms, end_ms, bucket_kind, range_key) = selection_range(range)?;
 
     let tx = conn
         .unchecked_transaction()
         .map_err(|err| err.to_string())?;
-    let end_ms = now.timestamp_millis();
     let mut providers = Vec::new();
     let mut models = Vec::new();
     {
@@ -156,18 +139,7 @@ pub fn overview(
         providers.extend(provider_set);
         models.extend(model_set);
     }
-    // Application selectors use collector ids, while stored app names are labels.
-    let app_name = match app_filter {
-        "codex" => "Codex",
-        "claude-code" => "Claude Code",
-        "gemini-cli" => "Gemini CLI",
-        "zcode" => "ZCode",
-        "cursor" => "Cursor",
-        "kiro" => "Kiro",
-        "claude-desktop" => "Claude Desktop",
-        "opencode" => "OpenCode",
-        other => other,
-    };
+    let app_name = application_name(app_filter);
     let undated_count = tx
         .query_row(
             "SELECT COUNT(*) FROM usage_events WHERE timestamp_ms = 0
@@ -333,6 +305,86 @@ pub fn overview(
     })
 }
 
+fn application_name(app: &str) -> &str {
+    match app {
+        "codex" => "Codex",
+        "claude-code" => "Claude Code",
+        "gemini-cli" => "Gemini CLI",
+        "zcode" => "ZCode",
+        "cursor" => "Cursor",
+        "kiro" => "Kiro",
+        "claude-desktop" => "Claude Desktop",
+        "opencode" => "OpenCode",
+        other => other,
+    }
+}
+fn selection_range(range: &str) -> Result<(i64, i64, &'static str, &str), String> {
+    let now = Local::now();
+    let (start, kind) = match range {
+        "7d" => (
+            local_day_start(now.date_naive() - Duration::days(6))?,
+            "day",
+        ),
+        "30d" => (
+            local_day_start(now.date_naive() - Duration::days(29))?,
+            "day",
+        ),
+        "all" => (0, "day"),
+        _ => (local_day_start(now.date_naive())?, "hour"),
+    };
+    let key = if matches!(range, "7d" | "30d" | "all") {
+        range
+    } else {
+        "today"
+    };
+    Ok((start, now.timestamp_millis(), kind, key))
+}
+
+/// Complete filtered metadata export, independent of the UI's latest-200 limit.
+/// SQLite selects an explicit allowlist; bodies and credentials are never read.
+pub fn export_metadata(
+    conn: &Connection,
+    range: &str,
+    app: &str,
+    provider: &str,
+    model: &str,
+) -> Result<String, String> {
+    let (start, end, _, _) = selection_range(range)?;
+    let mut stmt = conn.prepare("SELECT request_id,timestamp_ms,app,provider,model,fresh_input,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,total_tokens,project,session_id,source FROM usage_events
+        WHERE timestamp_ms >= ?1 AND timestamp_ms <= ?2 AND (?3 = '' OR app = ?3) AND (?4 = '' OR provider = ?4) AND (?5 = '' OR model = ?5)
+        ORDER BY timestamp_ms DESC, request_id DESC LIMIT 100001").map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![start, end, application_name(app), provider, model],
+            |row| {
+                Ok(UsageEvent {
+                    request_id: row.get(0)?,
+                    timestamp_ms: row.get(1)?,
+                    app: row.get(2)?,
+                    provider: row.get(3)?,
+                    model: row.get(4)?,
+                    fresh_input: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    reasoning_tokens: row.get(7)?,
+                    cache_read_tokens: row.get(8)?,
+                    cache_write_tokens: row.get(9)?,
+                    total_tokens: row.get(10)?,
+                    project: row.get(11)?,
+                    session_id: row.get(12)?,
+                    source: row.get(13)?,
+                })
+            },
+        )
+        .map_err(|err| err.to_string())?;
+    let events = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    if events.len() > 100000 {
+        return Err("导出超过 100,000 条，请缩小筛选范围".into());
+    }
+    serde_json::to_string_pretty(&events).map_err(|_| "无法生成用量导出文件".into())
+}
+
 type DatabaseStamp = Vec<(PathBuf, Option<(SystemTime, u64)>)>;
 struct CachedDatabase {
     stamp: DatabaseStamp,
@@ -470,8 +522,8 @@ fn collect_codex() -> Result<(Vec<UsageEvent>, String), String> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home().unwrap_or_default().join(".codex"));
     let mut files = Vec::new();
-    collect_jsonl(&root.join("sessions"), &mut files);
-    collect_jsonl(&root.join("archived_sessions"), &mut files);
+    collect_jsonl(&root.join("sessions"), &mut files)?;
+    collect_jsonl(&root.join("archived_sessions"), &mut files)?;
     if files.is_empty() {
         return Ok((Vec::new(), "未找到 Codex rollout 日志".to_string()));
     }
@@ -526,7 +578,7 @@ fn parse_codex_file(path: &Path) -> Result<Vec<UsageEvent>, String> {
 }
 
 fn parse_codex_file_uncached(path: &Path) -> Result<Vec<UsageEvent>, String> {
-    let text = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let text = read_metadata_file(path)?;
     let file_key = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -660,7 +712,7 @@ fn collect_claude() -> Result<(Vec<UsageEvent>, String), String> {
         .unwrap_or_else(|| home().unwrap_or_default().join(".claude"))
         .join("projects");
     let mut files = Vec::new();
-    collect_jsonl(&root, &mut files);
+    collect_jsonl(&root, &mut files)?;
     if files.is_empty() {
         return Ok((Vec::new(), "未找到 Claude Code 会话日志".to_string()));
     }
@@ -672,7 +724,7 @@ fn collect_claude() -> Result<(Vec<UsageEvent>, String), String> {
             .and_then(|name| name.to_str())
             .map(decode_claude_project)
             .unwrap_or_else(|| "未知项目".to_string());
-        let text = fs::read_to_string(file).map_err(|err| err.to_string())?;
+        let text = read_metadata_file(file)?;
         for line in text.lines() {
             if !line.contains("\"usage\"") {
                 continue;
@@ -721,7 +773,12 @@ fn collect_claude() -> Result<(Vec<UsageEvent>, String), String> {
                 cache_read_tokens: cache_read,
                 cache_write_tokens: cache_write,
                 total_tokens: total,
-                project: project.clone(),
+                project: value
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .filter(|cwd| !cwd.trim().is_empty())
+                    .map(project_name)
+                    .unwrap_or_else(|| project.clone()),
                 session_id: value
                     .get("sessionId")
                     .and_then(Value::as_str)
@@ -777,7 +834,7 @@ fn collect_gemini() -> Result<(Vec<UsageEvent>, String), String> {
     let mut best: HashMap<String, UsageEvent> = HashMap::new();
     let mut skipped = 0_i64;
     for file in &files {
-        let text = fs::read_to_string(file).map_err(|err| err.to_string())?;
+        let text = read_metadata_file(file)?;
         let records: Vec<Value> =
             if file.extension().and_then(|value| value.to_str()) == Some("json") {
                 serde_json::from_str::<Value>(&text).into_iter().collect()
@@ -874,18 +931,62 @@ fn collect_gemini() -> Result<(Vec<UsageEvent>, String), String> {
     ))
 }
 
-fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl(&path, out);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            out.push(path);
+// Never follow nested symlinks: source directories can contain cycles or links
+// to unrelated projects. Traversal failures must preserve the last good snapshot.
+fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<(), String> {
+        if depth > 32 {
+            return Err("会话目录层级超过限制，本次未更新该来源".into());
         }
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if depth == 0 && error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(())
+            }
+            Err(_) => return Err("无法读取会话目录，本次未更新该来源".into()),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|_| "无法读取会话目录项".to_string())?;
+            let kind = entry
+                .file_type()
+                .map_err(|_| "无法读取会话文件类型".to_string())?;
+            if kind.is_dir() {
+                walk(&entry.path(), out, depth + 1)?;
+            } else if kind.is_file()
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+            {
+                if out.len() >= 20_000 {
+                    return Err("会话文件数量超过限制，本次未更新该来源".into());
+                }
+                out.push(entry.path());
+            }
+        }
+        Ok(())
     }
+    walk(dir, out, 0)?;
+    out.sort();
+    Ok(())
+}
+
+fn read_metadata_file(path: &Path) -> Result<String, String> {
+    const LIMIT: u64 = 128 * 1024 * 1024;
+    let file = fs::File::open(path).map_err(|_| "无法读取会话文件".to_string())?;
+    if file
+        .metadata()
+        .map_err(|_| "无法读取会话文件信息".to_string())?
+        .len()
+        > LIMIT
+    {
+        return Err("会话文件超过 128 MiB，本次未更新该来源".into());
+    }
+    let mut text = String::new();
+    file.take(LIMIT + 1)
+        .read_to_string(&mut text)
+        .map_err(|_| "无法读取会话文件文本".to_string())?;
+    if text.len() as u64 > LIMIT {
+        return Err("会话文件超过大小限制".into());
+    }
+    Ok(text)
 }
 
 fn json_i64(value: &Value, key: &str) -> i64 {
@@ -1124,7 +1225,7 @@ fn collect_kiro() -> Result<(Vec<UsageEvent>, String), String> {
         .unwrap_or_else(|| home().unwrap_or_default().join(".kiro"))
         .join("sessions");
     let mut files = Vec::new();
-    collect_jsonl(&root, &mut files);
+    collect_jsonl(&root, &mut files)?;
     if files.is_empty() {
         return Ok((Vec::new(), "未找到 Kiro 会话".to_string()));
     }
@@ -1133,7 +1234,7 @@ fn collect_kiro() -> Result<(Vec<UsageEvent>, String), String> {
         .iter()
         .filter(|file| file.file_name().and_then(|name| name.to_str()) == Some("messages.jsonl"))
     {
-        let text = fs::read_to_string(file).map_err(|err| err.to_string())?;
+        let text = read_metadata_file(file)?;
         for line in text.lines() {
             if line.contains("\"usage_summary\"") {
                 turns += 1;

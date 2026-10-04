@@ -177,7 +177,10 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
   const [synced, setSynced] = useState<Date | null>(null);
-  const [auto, setAuto] = useState(30);
+  const [auto, setAuto] = useState(() => {
+    const saved = localStorage.getItem("tokenlens-auto-refresh");
+    return saved !== null && [0, 30, 60].includes(Number(saved)) ? Number(saved) : 30;
+  });
   const [metric, setMetric] = useState<"requests" | "tokens">("requests");
   const [tab, setTab] = useState("requests");
   const [more, setMore] = useState(false);
@@ -185,8 +188,14 @@ export default function App() {
   const [dialog, setDialog] = useState<"sources" | "settings" | null>(null);
   const [page, setPage] = useState(0);
   const [theme, setTheme] = useState(
-    () => localStorage.getItem("tokenlens-theme") || "light",
+    () => {
+      const saved = localStorage.getItem("tokenlens-theme");
+      return saved && ["light", "dark", "system"].includes(saved) ? saved : "light";
+    },
   );
+  const [dataBusy, setDataBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [notice, setNotice] = useState("");
   const generation = useRef(0);
   const refreshLock = useRef(false);
   const desktop = isTauri();
@@ -194,6 +203,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("tokenlens-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    localStorage.setItem("tokenlens-auto-refresh", String(auto));
+  }, [auto]);
+  useEffect(() => { setConfirmClear(false); }, [dialog]);
   const refresh = useCallback(async () => {
     if (!desktop || refreshLock.current) return;
     refreshLock.current = true;
@@ -263,6 +276,33 @@ export default function App() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [dialog]);
+  async function exportUsage() {
+    if (!desktop || dataBusy) return;
+    setDataBusy(true);
+    setNotice("");
+    try {
+      const path = await invoke<string | null>("export_usage", { range, app, provider, model });
+      if (path) setNotice(`用量元数据已保存：${path}`);
+    } catch (e) { setError(`导出失败：${String(e)}`); }
+    finally { setDataBusy(false); }
+  }
+  async function clearUsage() {
+    if (!desktop || dataBusy || refreshLock.current) return;
+    setDataBusy(true);
+    refreshLock.current = true;
+    setAuto(0);
+    setNotice("");
+    try {
+      await invoke("clear_usage");
+      setSources([]);
+      setOverview(null);
+      setSynced(null);
+      setConfirmClear(false);
+      setRevision((v) => v + 1);
+      setNotice("本地用量已清空，自动刷新已关闭。再次同步会重新读取来源记录。");
+    } catch (e) { setError(`清空失败：${String(e)}`); }
+    finally { setDataBusy(false); refreshLock.current = false; }
+  }
   function selectApp(id: string) {
     setApp(id);
     setProvider("");
@@ -384,7 +424,7 @@ export default function App() {
             <button
               className="outline"
               onClick={() => void refresh()}
-              disabled={refreshing || !desktop}
+              disabled={refreshing || dataBusy || !desktop}
             >
               <span className={refreshing ? "spin" : ""}>
                 <Icon name="refresh" size={18} />
@@ -400,6 +440,9 @@ export default function App() {
               <option value={30}>自动刷新 30 秒</option>
               <option value={60}>自动刷新 60 秒</option>
             </select>
+            <button className="outline" onClick={() => void exportUsage()} disabled={!desktop || dataBusy || loading || !hasData}>
+              {dataBusy ? "处理中…" : "导出元数据"}
+            </button>
             <button
               className="source-button"
               onClick={() => setDialog("sources")}
@@ -415,6 +458,7 @@ export default function App() {
               浏览器预览 · 在 TokenLens 桌面应用中查看本机真实用量。
             </p>
           )}
+          {notice && <p className="notice" role="status">{notice}</p>}
           {error && (
             <p className="error" role="alert">
               {error}
@@ -883,6 +927,18 @@ export default function App() {
                     <option value={60}>60 秒</option>
                   </select>
                 </div>
+                <div className="setting-row">
+                  <div><strong>本地用量数据</strong><p>仅清空 TokenLens 的统计，保留来源日志和外观设置。</p></div>
+                  <button className="outline danger" disabled={!desktop || refreshing || dataBusy} onClick={() => setConfirmClear(true)}>清空用量</button>
+                </div>
+                {confirmClear && <div className="clear-confirm" role="alert">
+                  <strong>确认清空所有已采集用量？</strong>
+                  <p>自动刷新将关闭。再次同步会重新导入来源日志中的记录。</p>
+                  <div>
+                    <button className="outline" disabled={dataBusy} onClick={() => setConfirmClear(false)}>取消</button>
+                    <button className="outline danger" disabled={dataBusy || refreshing} onClick={() => void clearUsage()}>{dataBusy ? "正在清空…" : "确认清空"}</button>
+                  </div>
+                </div>}
               </>
             )}
           </section>

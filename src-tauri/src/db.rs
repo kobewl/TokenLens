@@ -12,6 +12,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     conn.execute_batch(
         "
         PRAGMA journal_mode = WAL;
+        PRAGMA secure_delete = ON;
         CREATE TABLE IF NOT EXISTS usage_events (
             request_id TEXT PRIMARY KEY,
             timestamp_ms INTEGER NOT NULL,
@@ -128,4 +129,10 @@ pub fn replace_source(
     }
     tx.commit().map_err(|err| err.to_string())?;
     Ok(inserted)
+}
+
+// Keep source logs and preferences intact; clearing never touches external apps.
+pub fn clear_usage(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch("BEGIN IMMEDIATE; DELETE FROM usage_events; COMMIT; PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+        .map_err(|_| "无法清空本地用量，请稍后重试".to_string())
 }

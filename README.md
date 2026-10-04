@@ -19,6 +19,30 @@ Statistics use local calendar days. ZCode history already observed by TokenLens 
 
 The first screen is a light usage dashboard with an app sidebar, provider / model / date filters, summary cards, and an hourly or daily bar chart. Switch the chart between requests and Tokens, expand input / output / cache / reasoning metrics, and inspect the latest 200 request metadata records in pages of 10. Provider, model, and project tabs show aggregate usage. Collection and queries run on background workers so synchronization does not block the window. Unchanged Codex files and ZCode / Cursor databases reuse cached usage metadata, and unchanged rows are not rewritten. Source coverage and appearance settings open from the sidebar; automatic refresh can run every 30 or 60 seconds, or be disabled. Empty selections show a single compact message. Only apps with collected usage appear in quick navigation; source coverage remains available for all detected apps. Zero-valued extra metrics and entire zero-valued token columns are hidden, as are cost and speed until verifiable data is collected. Browser previews show empty states; real local usage is available in the desktop app. Design notes live outside the git tree, on the maintainer's machine.
 
+## Data management
+
+**Export metadata** saves the complete current app / provider / model / date selection to a JSON file through the native save dialog. The latest-200 display limit does not apply to export. Exports above 100,000 records are rejected so you can narrow the selection. The file contains only the same usage metadata stored in TokenLens; it does not contain prompts, responses, or credentials.
+
+**Settings → Clear usage** removes TokenLens's local usage history after confirmation and turns automatic refresh off. Original app logs and appearance preferences remain intact. Syncing again reimports available source records. Automatic refresh and appearance preferences persist between launches.
+
+Claude Code project attribution uses each record's working directory when available, preserving names that contain hyphens. JSONL discovery does not follow nested symbolic links; unreadable directories, excessive depth / file count, and files above 128 MiB report a source error and preserve the previous snapshot.
+
+## macOS installation and builds
+
+The **macOS packages** GitHub Actions workflow builds both Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`) packages on pull requests, version tags, or manual dispatch. Each build artifact contains a DMG, an app ZIP preserving executable permissions, and SHA-256 checksums. macOS 12 or later is required. Choose the package matching your Mac's processor, open the DMG, and drag TokenLens to Applications.
+
+These development packages are unsigned and not notarized. macOS may block first launch; for a package you have verified, use **System Settings → Privacy & Security → Open Anyway**. A trusted public release requires an Apple Developer signing identity and notarization configuration, which this repository does not currently have.
+
+To build on a Mac with Node.js 24, Rust, and Xcode Command Line Tools:
+
+```bash
+npm ci
+rustup target add aarch64-apple-darwin
+npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg -- --locked
+```
+
+For an Intel build replace the target with `x86_64-apple-darwin`. Packages are written under `src-tauri/target/<target>/release/bundle/`.
+
 ## Rules
 
 Read [SECURITY.md](SECURITY.md) before adding files.

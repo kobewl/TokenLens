@@ -1048,3 +1048,9 @@ footer {
 .range-note .undated-link {
   margin: 0 0 0 10px;
 }
+
+.danger { color: #b74848; }
+.clear-confirm { margin-top: 12px; padding: 16px; border: 1px solid #bc535350; border-radius: 8px; font-size: 13px; }
+.clear-confirm p { margin: 8px 0 14px; color: var(--muted); line-height: 1.6; }
+.clear-confirm > div { display: flex; justify-content: flex-end; gap: 10px; }
+.setting-row > div { padding-right: 16px; }
