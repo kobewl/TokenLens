@@ -37,6 +37,12 @@ Codex configuration is generated as TOML; other clients receive a generic JSON f
 
 Memory records contain explicitly authored summaries and rationale, not usage metadata. They stay in the selected project's `.memory/` directory and are never uploaded or automatically committed. This repository ignores `.memory/` and database files. Each external project decides how to back up or version its memory; do not commit sensitive content. The original design documents remain outside this public repository.
 
+## Updates and version releases
+
+**Settings → Check updates** checks the stable GitHub Release channel, shows release notes, downloads a signed update after confirmation, and offers an explicit restart when installation completes. Startup checks are optional and show a quiet notice rather than interrupting work. A dismissed version can always be checked manually. Errors never claim that the app is up to date. **What's new** remains available in Settings.
+
+A version tag triggers a two-architecture release build. Publication waits for both packages and verifies their signatures and signed version against the embedded public key before uploading the complete release and `latest.json`. Actions needs the matching `TAURI_SIGNING_PRIVATE_KEY` repository secret. Updater authentication is separate from Apple signing and notarization. See [release setup and versioning](docs/RELEASING.md) for activation, tagging, and packaging instructions. Install version 0.3.0 manually once to update older versions that do not include the updater.
+
 ## Data management
 
 **Export metadata** saves the complete current app / provider / model / date selection to a JSON file through the native save dialog. The latest-200 display limit does not apply to export. Exports above 100,000 records are rejected so you can narrow the selection. The file contains only the same usage metadata stored in TokenLens; it does not contain prompts, responses, or credentials.
@@ -47,7 +53,7 @@ Claude Code project attribution uses each record's working directory when availa
 
 ## macOS installation and builds
 
-The **macOS packages** GitHub Actions workflow builds both Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`) packages on pull requests, version tags, or manual dispatch. Each build artifact contains a DMG, an app ZIP preserving executable permissions, and SHA-256 checksums. macOS 12 or later is required. Choose the package matching your Mac's processor, open the DMG, and drag TokenLens to Applications.
+The **macOS packages** GitHub Actions workflow builds preview Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`) packages on pull requests or manual dispatch. The separate **Release** workflow publishes complete version-tagged releases with signed updater archives after both architectures succeed. Each build artifact contains a DMG, an app ZIP preserving executable permissions, and SHA-256 checksums. macOS 12 or later is required. Choose the package matching your Mac's processor, open the DMG, and drag TokenLens to Applications.
 
 These development packages are unsigned and not notarized. macOS may block first launch; for a package you have verified, use **System Settings → Privacy & Security → Open Anyway**. A trusted public release requires an Apple Developer signing identity and notarization configuration, which this repository does not currently have.
 
@@ -56,7 +62,7 @@ To build on a Mac with Node.js 24, Rust, and Xcode Command Line Tools:
 ```bash
 npm ci
 rustup target add aarch64-apple-darwin
-npm run tauri -- build --target aarch64-apple-darwin --bundles app,dmg -- --locked
+npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}' --target aarch64-apple-darwin --bundles app,dmg -- --locked
 ```
 
 For an Intel build replace the target with `x86_64-apple-darwin`. Packages are written under `src-tauri/target/<target>/release/bundle/`.

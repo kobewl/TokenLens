@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
 import Management from "./Management";
+import { useUpdates, UpdateSettings, UpdateDialogs } from "./UpdateCenter";
 
 type NamedTotal = {
   name: string;
@@ -165,6 +166,7 @@ function AppMark({ id }: { id: string }) {
   );
 }
 export default function App() {
+  const updates = useUpdates();
   const [view, setView] = useState<"hub" | "usage" | "tools" | "memory">("hub");
   const [range, setRange] = useState("today");
   const [app, setApp] = useState("");
@@ -837,7 +839,7 @@ export default function App() {
           </> : <Management page={view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => setView("memory")} onTools={() => setView("tools")} />}
         </div>
       </main>
-      {dialog && (
+      {dialog && !updates.dialog && (
         <div className="modal-backdrop" onClick={() => setDialog(null)}>
           <section
             className="modal"
@@ -913,6 +915,7 @@ export default function App() {
                     <option value={60}>60 秒</option>
                   </select>
                 </div>
+                <UpdateSettings controller={updates} />
                 <div className="setting-row">
                   <div><strong>本地用量数据</strong><p>仅清空 TokenLens 的统计，保留来源日志和外观设置。</p></div>
                   <button className="outline danger" disabled={!desktop || refreshing || dataBusy} onClick={() => setConfirmClear(true)}>清空用量</button>
@@ -930,6 +933,7 @@ export default function App() {
           </section>
         </div>
       )}
+      <UpdateDialogs controller={updates} />
     </div>
   );
 }

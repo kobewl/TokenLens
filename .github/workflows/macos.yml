@@ -2,8 +2,6 @@ name: macOS packages
 on:
   pull_request:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 permissions:
   contents: read
 concurrency:
@@ -33,6 +31,8 @@ jobs:
           key: ${{ matrix.target }}
       - run: npm ci
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Disable signed updater artifacts for preview
+        run: node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p));c.bundle.createUpdaterArtifacts=false;fs.writeFileSync(p,JSON.stringify(c,null,2));"
       - name: Build unsigned app and DMG
         run: npm run tauri -- build --ci --target ${{ matrix.target }} --bundles app,dmg -- --locked
       - name: Package app and checksums
