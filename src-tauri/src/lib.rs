@@ -1,4 +1,5 @@
 mod db;
+mod editor_memory;
 mod mcp;
 mod memory;
 mod model;
@@ -7,7 +8,7 @@ pub use mcp::run_mcp;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use model::{Overview, SourceReport};
 use tauri::Manager;
@@ -15,6 +16,7 @@ use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     db_path: PathBuf,
+    editor_memories: Arc<Mutex<editor_memory::Index>>,
     refreshing: Arc<AtomicBool>,
 }
 
@@ -201,6 +203,97 @@ async fn memory_config(
     .await
     .map_err(|_| "配置生成失败".to_string())?
 }
+#[tauri::command]
+async fn scan_editor_memories(
+    state: tauri::State<'_, AppState>,
+) -> Result<editor_memory::Catalog, String> {
+    let path = state.db_path.clone();
+    let index = state.editor_memories.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("无法定位用户目录")?
+            .canonicalize()
+            .map_err(|_| "用户目录不可访问")?;
+        let roots = memory::projects(&db::open_reader(&path)?)?
+            .into_iter()
+            .map(|p| p.root)
+            .collect::<Vec<_>>();
+        Ok(index.lock().map_err(|_| "记忆索引忙")?.scan(&home, &roots))
+    })
+    .await
+    .map_err(|_| "扫描任务失败".to_string())?
+}
+#[tauri::command]
+async fn read_editor_memory(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<editor_memory::Document, String> {
+    let index = state.editor_memories.clone();
+    tauri::async_runtime::spawn_blocking(move || index.lock().map_err(|_| "记忆索引忙")?.read(&id))
+        .await
+        .map_err(|_| "读取任务失败".to_string())?
+}
+#[tauri::command]
+async fn aggregate_editor_memories(
+    state: tauri::State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<editor_memory::Aggregation, String> {
+    let index = state.editor_memories.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        index.lock().map_err(|_| "记忆索引忙")?.aggregate(&ids)
+    })
+    .await
+    .map_err(|_| "汇总任务失败".to_string())?
+}
+#[tauri::command]
+async fn preview_editor_sync(
+    state: tauri::State<'_, AppState>,
+    ids: Vec<String>,
+    root: String,
+    tool: String,
+    content: String,
+    allow_agents: bool,
+    fingerprints: std::collections::BTreeMap<String, String>,
+) -> Result<editor_memory::Preview, String> {
+    let index = state.editor_memories.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        index.lock().map_err(|_| "记忆索引忙")?.preview(
+            &ids,
+            &root,
+            &tool,
+            &content,
+            allow_agents,
+            &fingerprints,
+        )
+    })
+    .await
+    .map_err(|_| "预览任务失败".to_string())?
+}
+#[tauri::command]
+async fn apply_editor_sync(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<editor_memory::SyncResult, String> {
+    let index = state.editor_memories.clone();
+    let data_dir = app.path().app_data_dir().map_err(|_| "无法定位备份目录")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        index
+            .lock()
+            .map_err(|_| "记忆索引忙")?
+            .apply(&id, &data_dir)
+    })
+    .await
+    .map_err(|_| "同步任务失败".to_string())?
+}
+#[tauri::command]
+async fn undo_editor_sync(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let index = state.editor_memories.clone();
+    tauri::async_runtime::spawn_blocking(move || index.lock().map_err(|_| "记忆索引忙")?.undo(&id))
+        .await
+        .map_err(|_| "恢复任务失败".to_string())?
+}
 // Commands must yield before doing filesystem or SQLite work: synchronous
 // Tauri commands execute on the window thread.
 #[tauri::command]
@@ -263,6 +356,7 @@ pub fn run() {
             db::open(&dir.join("tokenlens.sqlite"))?;
             app.manage(AppState {
                 db_path: dir.join("tokenlens.sqlite"),
+                editor_memories: Arc::new(Mutex::new(editor_memory::Index::default())),
                 refreshing: Arc::new(AtomicBool::new(false)),
             });
             Ok(())
@@ -279,7 +373,13 @@ pub fn run() {
             write_handoff,
             write_decision,
             rebuild_memory,
-            memory_config
+            memory_config,
+            scan_editor_memories,
+            read_editor_memory,
+            aggregate_editor_memories,
+            preview_editor_sync,
+            apply_editor_sync,
+            undo_editor_sync
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

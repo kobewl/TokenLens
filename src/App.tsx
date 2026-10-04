@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
 import Management from "./Management";
+import EditorMemoryHub, { useEditorMemoryCatalog } from "./EditorMemoryHub";
 import { useUpdates, UpdateSettings, UpdateDialogs } from "./UpdateCenter";
 
 type NamedTotal = {
@@ -167,7 +168,8 @@ function AppMark({ id }: { id: string }) {
 }
 export default function App() {
   const updates = useUpdates();
-  const [view, setView] = useState<"hub" | "usage" | "tools" | "memory">("hub");
+  const editorMemories = useEditorMemoryCatalog();
+  const [view, setView] = useState<"hub" | "usage" | "tools" | "memory" | "handoffs">("memory");
   const [range, setRange] = useState("today");
   const [app, setApp] = useState("");
   const [provider, setProvider] = useState("");
@@ -370,7 +372,7 @@ export default function App() {
         </div>
         <nav className="workspace-nav" aria-label="工作台导航">
           {!collapsed && <span className="nav-label">WORKSPACE</span>}
-          {([{ id: "hub", label: "工作台", icon: "chart" }, { id: "tools", label: "工具总览", icon: "database" }, { id: "memory", label: "项目记忆", icon: "database" }, { id: "usage", label: "用量统计", icon: "chart" }] as const).map(item => <button key={item.id} title={item.label} aria-current={view === item.id ? "page" : undefined} className={view === item.id ? "selected" : ""} onClick={() => item.id === "usage" ? selectApp("") : setView(item.id)}><Icon name={item.icon} />{!collapsed && <span>{item.label}</span>}</button>)}
+          {([{ id: "hub", label: "工作台", icon: "chart" }, { id: "tools", label: "工具总览", icon: "database" }, { id: "memory", label: "编辑器记忆", icon: "database" }, { id: "handoffs", label: "项目交接", icon: "chart" }, { id: "usage", label: "用量统计", icon: "chart" }] as const).map(item => <button key={item.id} title={item.label} aria-current={view === item.id ? "page" : undefined} className={view === item.id ? "selected" : ""} onClick={() => item.id === "usage" ? selectApp("") : setView(item.id)}><Icon name={item.icon} />{!collapsed && <span>{item.label}</span>}</button>)}
         </nav>
         <nav className="app-nav" aria-label="应用筛选">
           {!collapsed && <span className="nav-label">用量快捷入口</span>}
@@ -394,14 +396,14 @@ export default function App() {
         <header className="topbar">
           <h1>
             <Icon name="chart" size={24} />
-            {{ hub: "工作台", usage: "用量统计", tools: "工具总览", memory: "项目记忆" }[view]}{" "}
+            {{ hub: "工作台", usage: "用量统计", tools: "工具总览", memory: "编辑器记忆", handoffs: "项目交接" }[view]}{" "}
             <span title="本机用量与项目记忆统一管理，记忆由你或接入工具显式写入。">
               <Icon name="help" size={16} />
             </span>
           </h1>
           <div className="header-tools">
             <span className="sync-status" role="status">
-              {refreshing
+              {view === "memory" ? (editorMemories.loading ? "正在发现记忆…" : editorMemories.checkedAt ? `本机记忆 · ${editorMemories.checkedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 扫描` : "本机记忆 · 等待扫描") : refreshing
                 ? "正在同步…"
                 : synced
                   ? `会话日志 · ${synced.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 同步`
@@ -409,15 +411,15 @@ export default function App() {
             </span>
             <button
               className="outline"
-              onClick={() => void refresh()}
-              disabled={refreshing || dataBusy || !desktop}
+              onClick={() => void (view === "memory" ? editorMemories.scan() : refresh())}
+              disabled={(view === "memory" ? editorMemories.loading : refreshing || dataBusy) || !desktop}
             >
               <span className={refreshing ? "spin" : ""}>
                 <Icon name="refresh" size={18} />
               </span>
-              立即同步
+              {view === "memory" ? "刷新记忆" : "立即同步"}
             </button>
-            <select
+            {view !== "memory" && <select
               aria-label="自动刷新"
               value={auto}
               onChange={(e) => setAuto(Number(e.target.value))}
@@ -425,17 +427,17 @@ export default function App() {
               <option value={0}>关闭自动刷新</option>
               <option value={30}>自动刷新 30 秒</option>
               <option value={60}>自动刷新 60 秒</option>
-            </select>
+            </select>}
             {view === "usage" && <button className="outline" onClick={() => void exportUsage()} disabled={!desktop || dataBusy || loading || !hasData}>
               {dataBusy ? "处理中…" : "导出元数据"}
             </button>}
-            <button
+            {view !== "memory" && <button
               className="source-button"
               onClick={() => setDialog("sources")}
             >
               <Icon name="database" size={18} />
               数据来源
-            </button>
+            </button>}
           </div>
         </header>
         <div className="content" aria-busy={view === "usage" && loading}>
@@ -836,7 +838,7 @@ export default function App() {
           <footer>
             TokenLens <span>本机统计可能与供应商账单存在差异</span>
           </footer>
-          </> : <Management page={view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => setView("memory")} onTools={() => setView("tools")} />}
+          </> : view === "memory" ? <EditorMemoryHub catalog={editorMemories} /> : <Management page={view === "handoffs" ? "memory" : view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => { setView("handoffs"); void editorMemories.scan(); }} onTools={() => setView("tools")} />}
         </div>
       </main>
       {dialog && !updates.dialog && (
