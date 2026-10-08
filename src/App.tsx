@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./App.css";
+import Management from "./Management";
+import EditorMemoryHub, { useEditorMemoryCatalog } from "./EditorMemoryHub";
+import { useUpdates, UpdateSettings, UpdateDialogs } from "./UpdateCenter";
 
 type NamedTotal = {
   name: string;
@@ -164,6 +167,9 @@ function AppMark({ id }: { id: string }) {
   );
 }
 export default function App() {
+  const updates = useUpdates();
+  const editorMemories = useEditorMemoryCatalog();
+  const [view, setView] = useState<"hub" | "usage" | "tools" | "memory" | "handoffs">("memory");
   const [range, setRange] = useState("today");
   const [app, setApp] = useState("");
   const [provider, setProvider] = useState("");
@@ -177,7 +183,10 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
   const [synced, setSynced] = useState<Date | null>(null);
-  const [auto, setAuto] = useState(30);
+  const [auto, setAuto] = useState(() => {
+    const saved = localStorage.getItem("tokenlens-auto-refresh");
+    return saved !== null && [0, 30, 60].includes(Number(saved)) ? Number(saved) : 30;
+  });
   const [metric, setMetric] = useState<"requests" | "tokens">("requests");
   const [tab, setTab] = useState("requests");
   const [more, setMore] = useState(false);
@@ -185,8 +194,14 @@ export default function App() {
   const [dialog, setDialog] = useState<"sources" | "settings" | null>(null);
   const [page, setPage] = useState(0);
   const [theme, setTheme] = useState(
-    () => localStorage.getItem("tokenlens-theme") || "light",
+    () => {
+      const saved = localStorage.getItem("tokenlens-theme");
+      return saved && ["light", "dark", "system"].includes(saved) ? saved : "light";
+    },
   );
+  const [dataBusy, setDataBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [notice, setNotice] = useState("");
   const generation = useRef(0);
   const refreshLock = useRef(false);
   const desktop = isTauri();
@@ -194,6 +209,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("tokenlens-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    localStorage.setItem("tokenlens-auto-refresh", String(auto));
+  }, [auto]);
+  useEffect(() => { setConfirmClear(false); }, [dialog]);
   const refresh = useCallback(async () => {
     if (!desktop || refreshLock.current) return;
     refreshLock.current = true;
@@ -263,7 +282,35 @@ export default function App() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [dialog]);
+  async function exportUsage() {
+    if (!desktop || dataBusy) return;
+    setDataBusy(true);
+    setNotice("");
+    try {
+      const path = await invoke<string | null>("export_usage", { range, app, provider, model });
+      if (path) setNotice(`用量元数据已保存：${path}`);
+    } catch (e) { setError(`导出失败：${String(e)}`); }
+    finally { setDataBusy(false); }
+  }
+  async function clearUsage() {
+    if (!desktop || dataBusy || refreshLock.current) return;
+    setDataBusy(true);
+    refreshLock.current = true;
+    setAuto(0);
+    setNotice("");
+    try {
+      await invoke("clear_usage");
+      setSources([]);
+      setOverview(null);
+      setSynced(null);
+      setConfirmClear(false);
+      setRevision((v) => v + 1);
+      setNotice("本地用量已清空，自动刷新已关闭。再次同步会重新读取来源记录。");
+    } catch (e) { setError(`清空失败：${String(e)}`); }
+    finally { setDataBusy(false); refreshLock.current = false; }
+  }
   function selectApp(id: string) {
+    setView("usage");
     setApp(id);
     setProvider("");
     setModel("");
@@ -323,34 +370,15 @@ export default function App() {
             <Icon name={collapsed ? "chevron" : "back"} size={16} />
           </button>
         </div>
+        <nav className="workspace-nav" aria-label="工作台导航">
+          {!collapsed && <span className="nav-label">WORKSPACE</span>}
+          {([{ id: "hub", label: "工作台", icon: "chart" }, { id: "tools", label: "工具总览", icon: "database" }, { id: "memory", label: "编辑器记忆", icon: "database" }, { id: "handoffs", label: "项目交接", icon: "chart" }, { id: "usage", label: "用量统计", icon: "chart" }] as const).map(item => <button key={item.id} title={item.label} aria-current={view === item.id ? "page" : undefined} className={view === item.id ? "selected" : ""} onClick={() => item.id === "usage" ? selectApp("") : setView(item.id)}><Icon name={item.icon} />{!collapsed && <span>{item.label}</span>}</button>)}
+        </nav>
         <nav className="app-nav" aria-label="应用筛选">
-          {visibleApps.map((a) => (
-            <button
-              key={a.id}
-              className={app === a.id ? "selected" : ""}
-              onClick={() => selectApp(app === a.id ? "" : a.id)}
-              title={a.name}
-              aria-pressed={app === a.id}
-            >
-              <AppMark id={a.id} />
-              {!collapsed && <span>{a.name}</span>}
-            </button>
-          ))}
+          {!collapsed && <span className="nav-label">用量快捷入口</span>}
+          {visibleApps.map(a => <button key={a.id} className={view === "usage" && app === a.id ? "selected" : ""} onClick={() => selectApp(app === a.id ? "" : a.id)} title={a.name} aria-pressed={view === "usage" && app === a.id}><AppMark id={a.id} />{!collapsed && <span>{a.name}</span>}</button>)}
         </nav>
         <div className="sidebar-bottom">
-          <button
-            className="selected"
-            onClick={() => selectApp("")}
-            title="用量统计"
-          >
-            <Icon name="chart" />
-            {!collapsed && (
-              <>
-                <span>用量统计</span>
-                {hasData && <small>{compact(overview!.totalTokens)}</small>}
-              </>
-            )}
-          </button>
           <button onClick={() => setDialog("sources")} title="数据来源">
             <Icon name="database" />
             {!collapsed && <span>数据来源</span>}
@@ -368,14 +396,14 @@ export default function App() {
         <header className="topbar">
           <h1>
             <Icon name="chart" size={24} />
-            用量统计{" "}
-            <span title="统计来自本机可读取的用量记录，可能与供应商账单不同。">
+            {{ hub: "工作台", usage: "用量统计", tools: "工具总览", memory: "编辑器记忆", handoffs: "项目交接" }[view]}{" "}
+            <span title="本机用量与项目记忆统一管理，记忆由你或接入工具显式写入。">
               <Icon name="help" size={16} />
             </span>
           </h1>
           <div className="header-tools">
             <span className="sync-status" role="status">
-              {refreshing
+              {view === "memory" ? (editorMemories.loading ? "正在发现记忆…" : editorMemories.checkedAt ? `本机记忆 · ${editorMemories.checkedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 扫描` : "本机记忆 · 等待扫描") : refreshing
                 ? "正在同步…"
                 : synced
                   ? `会话日志 · ${synced.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 同步`
@@ -383,15 +411,15 @@ export default function App() {
             </span>
             <button
               className="outline"
-              onClick={() => void refresh()}
-              disabled={refreshing || !desktop}
+              onClick={() => void (view === "memory" ? editorMemories.scan() : refresh())}
+              disabled={(view === "memory" ? editorMemories.loading : refreshing || dataBusy) || !desktop}
             >
               <span className={refreshing ? "spin" : ""}>
                 <Icon name="refresh" size={18} />
               </span>
-              立即同步
+              {view === "memory" ? "刷新记忆" : "立即同步"}
             </button>
-            <select
+            {view !== "memory" && <select
               aria-label="自动刷新"
               value={auto}
               onChange={(e) => setAuto(Number(e.target.value))}
@@ -399,22 +427,27 @@ export default function App() {
               <option value={0}>关闭自动刷新</option>
               <option value={30}>自动刷新 30 秒</option>
               <option value={60}>自动刷新 60 秒</option>
-            </select>
-            <button
+            </select>}
+            {view === "usage" && <button className="outline" onClick={() => void exportUsage()} disabled={!desktop || dataBusy || loading || !hasData}>
+              {dataBusy ? "处理中…" : "导出元数据"}
+            </button>}
+            {view !== "memory" && <button
               className="source-button"
               onClick={() => setDialog("sources")}
             >
               <Icon name="database" size={18} />
               数据来源
-            </button>
+            </button>}
           </div>
         </header>
-        <div className="content" aria-busy={loading}>
+        <div className="content" aria-busy={view === "usage" && loading}>
+          {view === "usage" ? <>
           {!desktop && (
             <p className="notice">
               浏览器预览 · 在 TokenLens 桌面应用中查看本机真实用量。
             </p>
           )}
+          {notice && <p className="notice" role="status">{notice}</p>}
           {error && (
             <p className="error" role="alert">
               {error}
@@ -805,9 +838,10 @@ export default function App() {
           <footer>
             TokenLens <span>本机统计可能与供应商账单存在差异</span>
           </footer>
+          </> : view === "memory" ? <EditorMemoryHub catalog={editorMemories} /> : <Management page={view === "handoffs" ? "memory" : view} sources={sources} revision={revision} onUsage={(id) => { setRange("all"); selectApp(id); }} onMemory={() => { setView("handoffs"); void editorMemories.scan(); }} onTools={() => setView("tools")} />}
         </div>
       </main>
-      {dialog && (
+      {dialog && !updates.dialog && (
         <div className="modal-backdrop" onClick={() => setDialog(null)}>
           <section
             className="modal"
@@ -883,11 +917,25 @@ export default function App() {
                     <option value={60}>60 秒</option>
                   </select>
                 </div>
+                <UpdateSettings controller={updates} />
+                <div className="setting-row">
+                  <div><strong>本地用量数据</strong><p>仅清空 TokenLens 的统计，保留来源日志和外观设置。</p></div>
+                  <button className="outline danger" disabled={!desktop || refreshing || dataBusy} onClick={() => setConfirmClear(true)}>清空用量</button>
+                </div>
+                {confirmClear && <div className="clear-confirm" role="alert">
+                  <strong>确认清空所有已采集用量？</strong>
+                  <p>自动刷新将关闭。再次同步会重新导入来源日志中的记录。</p>
+                  <div>
+                    <button className="outline" disabled={dataBusy} onClick={() => setConfirmClear(false)}>取消</button>
+                    <button className="outline danger" disabled={dataBusy || refreshing} onClick={() => void clearUsage()}>{dataBusy ? "正在清空…" : "确认清空"}</button>
+                  </div>
+                </div>}
               </>
             )}
           </section>
         </div>
       )}
+      <UpdateDialogs controller={updates} />
     </div>
   );
 }

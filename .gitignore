@@ -44,3 +44,6 @@ logs
 .idea
 .vscode/*
 !.vscode/extensions.json
+
+# Explicit project memory is local data, never committed from this repository
+.memory/

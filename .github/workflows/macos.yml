@@ -1,0 +1,52 @@
+name: macOS packages
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Disable signed updater artifacts for preview
+        run: node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p));c.bundle.createUpdaterArtifacts=false;fs.writeFileSync(p,JSON.stringify(c,null,2));"
+      - name: Build unsigned app and DMG
+        run: npm run tauri -- build --ci --target ${{ matrix.target }} --bundles app,dmg -- --locked
+      - name: Package app and checksums
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p macos-packages
+          ditto -c -k --sequesterRsrc --keepParent "src-tauri/target/$TARGET/release/bundle/macos/TokenLens.app" "macos-packages/TokenLens-$TARGET.app.zip"
+          cp src-tauri/target/$TARGET/release/bundle/dmg/*.dmg macos-packages/
+          cd macos-packages
+          shasum -a 256 *.dmg *.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TokenLens-${{ matrix.target }}
+          path: macos-packages/
+          if-no-files-found: error
+          retention-days: 30

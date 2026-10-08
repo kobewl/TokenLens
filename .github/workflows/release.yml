@@ -1,0 +1,124 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing stable version tag (e.g. v0.3.0)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate source and release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          UPDATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          node scripts/release.mjs validate "$RELEASE_TAG"
+          git rev-parse --verify "refs/tags/$RELEASE_TAG"
+          git merge-base --is-ancestor HEAD origin/main
+          if [ -z "$UPDATE_KEY" ]; then
+            echo "::error::Configure TAURI_SIGNING_PRIVATE_KEY in repository Actions secrets before releasing."
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+  build:
+    needs: validate
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Build app, DMG and signed updater archive
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --ci --target ${{ matrix.target }} --bundles app,dmg -- --locked
+      - name: Stage release assets
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          version="${RELEASE_TAG#v}"
+          base="src-tauri/target/$BUILD_TARGET/release/bundle"
+          cp "$base"/dmg/*.dmg release-assets/
+          cp "$base/macos/TokenLens.app.tar.gz" "release-assets/TokenLens_${version}_${BUILD_TARGET}.app.tar.gz"
+          cp "$base/macos/TokenLens.app.tar.gz.sig" "release-assets/TokenLens_${version}_${BUILD_TARGET}.app.tar.gz.sig"
+          ditto -c -k --sequesterRsrc --keepParent "$base/macos/TokenLens.app" "release-assets/TokenLens_${version}_${BUILD_TARGET}.app.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify signatures and generate update manifest
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: node scripts/release.mjs manifest "$RELEASE_TAG" release-assets
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # Do not mutate an already published version on a retry.
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            node -e "const r=require(process.env.RUNNER_TEMP+'/release.json');if(!r.isDraft)throw Error('Release is already published; use a new version tag.');"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "TokenLens $RELEASE_TAG" --notes-file "docs/releases/${RELEASE_TAG#v}.md"
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest --notes-file "docs/releases/${RELEASE_TAG#v}.md"
