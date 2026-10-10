@@ -73,3 +73,5 @@ export type ProjectMemory = {
 
 export type Range = "today" | "7d" | "30d" | "all";
 export type PageId = "home" | "usage" | "tools" | "handoffs" | "memory" | "settings";
+
+export type CursorActivity = { chatsToday: number; chatsWeek: number; lastCountedMs: number };

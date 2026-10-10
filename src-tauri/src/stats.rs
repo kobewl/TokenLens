@@ -441,6 +441,31 @@ struct CachedDatabase {
     events: Vec<UsageEvent>,
     detail: String,
 }
+/// (last-update time of every Cursor chat with content, newest timestamp of a chat turn that had token counts)
+static CURSOR_ACTIVITY: Mutex<(Vec<i64>, i64)> = Mutex::new((Vec::new(), 0));
+
+/// Cursor chats active today / in the last 7 local days. This is activity, never token usage.
+pub fn cursor_activity() -> crate::model::CursorActivity {
+    let start = |days_back: i64| -> i64 {
+        (Local::now().date_naive() - Duration::days(days_back))
+            .and_hms_opt(0, 0, 0)
+            .and_then(|t| t.and_local_timezone(Local).earliest())
+            .map(|t| t.timestamp_millis())
+            .unwrap_or(0)
+    };
+    let (today, week) = (start(0), start(6));
+    let guard = CURSOR_ACTIVITY.lock();
+    let (chats, last) = guard
+        .as_deref()
+        .map(|g| (g.0.as_slice(), g.1))
+        .unwrap_or((&[], 0));
+    crate::model::CursorActivity {
+        chats_today: chats.iter().filter(|t| **t >= today).count() as i64,
+        chats_week: chats.iter().filter(|t| **t >= week).count() as i64,
+        last_counted_ms: last,
+    }
+}
+
 static DATABASE_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedDatabase>>> = OnceLock::new();
 
 fn database_stamp(path: &Path) -> DatabaseStamp {
@@ -1116,10 +1141,12 @@ fn collect_cursor_uncached() -> Result<(Vec<UsageEvent>, String), String> {
         if id.is_empty() {
             continue;
         }
+        let mut messages = 0;
         if let Some(headers) = value
             .get("fullConversationHeadersOnly")
             .and_then(Value::as_array)
         {
+            messages = headers.len();
             for header in headers {
                 let Some(bubble_id) = header.get("bubbleId").and_then(Value::as_str) else {
                     continue;
@@ -1137,6 +1164,7 @@ fn collect_cursor_uncached() -> Result<(Vec<UsageEvent>, String), String> {
             id,
             CursorComposer {
                 updated: value.get("lastUpdatedAt").and_then(json_stamp).unwrap_or(0),
+                messages,
                 model: value
                     .pointer("/modelConfig/modelName")
                     .and_then(Value::as_str)
@@ -1236,6 +1264,23 @@ fn collect_cursor_uncached() -> Result<(Vec<UsageEvent>, String), String> {
         turn_count += 1;
     }
 
+    // Remember when chats were last active so the UI can say "Cursor was used today,
+    // but this version of Cursor stores no per-request tokens" instead of showing nothing.
+    let chats: Vec<i64> = meta
+        .values()
+        .filter(|c| c.updated > 0 && (c.messages > 0 || c.context_tokens > 0))
+        .map(|c| c.updated)
+        .collect();
+    let last_counted_ms = events
+        .iter()
+        .map(|e| e.timestamp_ms)
+        .max()
+        .unwrap_or(0)
+        .max(0);
+    if let Ok(mut guard) = CURSOR_ACTIVITY.lock() {
+        *guard = (chats, last_counted_ms);
+    }
+
     let mut context_chats = 0_i64;
     for composer in meta.values() {
         if composer.had_turn_tokens || composer.context_tokens <= 0 || composer.updated <= 0 {
@@ -1243,14 +1288,27 @@ fn collect_cursor_uncached() -> Result<(Vec<UsageEvent>, String), String> {
         }
         context_chats += 1;
     }
+    let newest = if last_counted_ms > 0 {
+        DateTime::from_timestamp_millis(last_counted_ms)
+            .map(|t| {
+                format!(
+                    "最近一条带 Token 的记录在 {}，之后的 Cursor 版本不再写入逐条 Token。",
+                    t.with_timezone(&Local).format("%Y-%m-%d")
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let detail = format!(
-        "{turn_count} 次有逐条 Token（{undated_turns} 次日期未知，仅计入全部）；{context_chats} 个对话只有上下文大小，未计入消耗"
+        "{turn_count} 次有逐条 Token（{undated_turns} 次日期未知，仅计入全部）；{context_chats} 个对话只有上下文大小，未计入消耗。{newest}"
     );
     Ok((events, detail))
 }
 
 struct CursorComposer {
     updated: i64,
+    messages: usize,
     model: String,
     project: String,
     context_tokens: i64,

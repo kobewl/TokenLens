@@ -331,6 +331,11 @@ pub(crate) fn run_refresh(app: &tauri::AppHandle) -> Result<Vec<SourceReport>, S
 // Commands must yield before doing filesystem or SQLite work: synchronous
 // Tauri commands execute on the window thread.
 #[tauri::command]
+fn cursor_activity() -> model::CursorActivity {
+    stats::cursor_activity()
+}
+
+#[tauri::command]
 async fn refresh(app: tauri::AppHandle) -> Result<Vec<SourceReport>, String> {
     tauri::async_runtime::spawn_blocking(move || run_refresh(&app))
         .await
@@ -452,6 +457,7 @@ pub fn run() {
             refresh,
             overview,
             daily_totals,
+            cursor_activity,
             set_tray_prefs,
             export_usage,
             clear_usage,
