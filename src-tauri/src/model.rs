@@ -128,3 +128,16 @@ pub fn from_additive_input(
     let total = fresh + cache_read + cache_write + output;
     (fresh, output, 0, cache_read, cache_write, total)
 }
+
+/// One local calendar day of aggregated usage metadata (no content).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DayTotal {
+    pub day: String,
+    pub total_tokens: i64,
+    pub event_count: i64,
+    pub fresh_input: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+}
