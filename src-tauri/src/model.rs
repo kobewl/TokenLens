@@ -141,3 +141,12 @@ pub struct DayTotal {
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
 }
+
+/// Cursor chat activity. Deliberately separate from usage: Cursor no longer stores per-request token counts.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorActivity {
+    pub chats_today: i64,
+    pub chats_week: i64,
+    pub last_counted_ms: i64,
+}

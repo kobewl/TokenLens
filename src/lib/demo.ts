@@ -235,6 +235,8 @@ export async function demoCall<T>(command: string, a: Args): Promise<T> {
         return overview(a as Parameters<typeof overview>[0]);
       case "daily_totals":
         return daily(a as Parameters<typeof daily>[0]);
+      case "cursor_activity":
+        return { chatsToday: 3, chatsWeek: 9, lastCountedMs: Date.now() - 400 * 86400_000 };
       case "set_tray_prefs":
         return null;
       case "list_projects":

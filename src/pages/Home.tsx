@@ -5,7 +5,7 @@ import { CHART_COLORS, findTool, toolId } from "../lib/catalog";
 import { clock, compact, number, percent, relative } from "../lib/format";
 import { useDaily, useOverview, windowTotal, type Filters, type useSync } from "../lib/hooks";
 import { money, totalCost, type PriceBook } from "../lib/pricing";
-import type { PageId, Project, ProjectMemory } from "../lib/types";
+import type { CursorActivity, PageId, Project, ProjectMemory } from "../lib/types";
 import Delta from "../ui/Delta";
 import PageHeader from "../ui/PageHeader";
 import ShareBars from "../ui/ShareBars";
@@ -51,6 +51,16 @@ export default function Home({ sync, prices, project, setProject, navigate, goUs
   const [memory, setMemory] = useState<ProjectMemory | null>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [version, setVersion] = useState(0);
+  const [cursor, setCursor] = useState<CursorActivity | null>(null);
+
+  // Cursor no longer writes per-request token counts, so it can be busy all day yet add nothing to the totals.
+  useEffect(() => {
+    let alive = true;
+    call<CursorActivity>("cursor_activity")
+      .then((a) => alive && setCursor(a))
+      .catch(() => alive && setCursor(null));
+    return () => void (alive = false);
+  }, [revision]);
 
   useEffect(() => {
     let alive = true;
@@ -88,6 +98,7 @@ export default function Home({ sync, prices, project, setProject, navigate, goUs
   }, [month.data]);
   const cost = t ? totalCost(prices, t.byModel) : null;
   const loading = !t || !daily.loaded;
+  const cursorGap = !!cursor && cursor.chatsToday > 0 && !t?.byApp.some((r) => toolId(r.name) === "cursor" && r.totalTokens > 0);
   const noRecentData = daily.loaded && sync.synced !== null && daily.days.length === 0;
   const activeDays = daily.days.filter((d) => d.totalTokens > 0).length;
   const run = streak(daily.days);
@@ -159,6 +170,25 @@ export default function Home({ sync, prices, project, setProject, navigate, goUs
           </div>
           <button className="btn" onClick={() => navigate("tools")}>
             查看数据来源 <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {cursorGap && cursor && (
+        <div className="callout">
+          <div className="callout-icon">
+            <ToolMark id="cursor" size={22} />
+          </div>
+          <div>
+            <strong>
+              Cursor 今天有 {cursor.chatsToday} 个对话在使用，但没有计入 Token
+            </strong>
+            <p>
+              这台电脑上 Cursor 的本地数据库没有记录近期每次请求的 Token 数（{cursor.lastCountedMs > 0 ? `最近一条带 Token 的记录是 ${new Date(cursor.lastCountedMs).toLocaleDateString("zh-CN")}` : "没有任何带 Token 的记录"}）。TokenLens 只读本机数据，不读取登录凭据，也不拿“上下文大小”冒充消耗，所以上面的数字不含 Cursor。
+            </p>
+          </div>
+          <button className="btn" onClick={() => navigate("tools")}>
+            了解详情 <ArrowRight size={14} />
           </button>
         </div>
       )}
