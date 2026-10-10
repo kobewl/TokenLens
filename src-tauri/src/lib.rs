@@ -4,20 +4,26 @@ mod mcp;
 mod memory;
 mod model;
 mod stats;
+mod tray;
 pub use mcp::run_mcp;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use model::{Overview, SourceReport};
-use tauri::Manager;
+use model::{DayTotal, Overview, SourceReport};
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     db_path: PathBuf,
     editor_memories: Arc<Mutex<editor_memory::Index>>,
     refreshing: Arc<AtomicBool>,
+    /// Show today's token count next to the menu-bar icon.
+    tray_title: Arc<AtomicBool>,
+    /// Closing the window hides it instead of quitting; sync continues in the background.
+    close_to_tray: Arc<AtomicBool>,
 }
 
 struct Reset(Arc<AtomicBool>);
@@ -28,9 +34,13 @@ impl Drop for Reset {
 }
 
 #[tauri::command]
-async fn clear_usage(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn clear_usage(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let path = state.db_path.clone();
     let refreshing = state.refreshing.clone();
+    let tray_title = state.tray_title.clone();
     if refreshing
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -39,7 +49,9 @@ async fn clear_usage(state: tauri::State<'_, AppState>) -> Result<(), String> {
     }
     tauri::async_runtime::spawn_blocking(move || {
         let _reset = Reset(refreshing);
-        db::clear_usage(&db::open(&path)?)
+        db::clear_usage(&db::open(&path)?)?;
+        tray::update(&app, &path, tray_title.load(Ordering::Relaxed));
+        Ok(())
     })
     .await
     .map_err(|_| "清空任务失败".to_string())?
@@ -294,25 +306,68 @@ async fn undo_editor_sync(state: tauri::State<'_, AppState>, id: String) -> Resu
         .await
         .map_err(|_| "恢复任务失败".to_string())?
 }
-// Commands must yield before doing filesystem or SQLite work: synchronous
-// Tauri commands execute on the window thread.
-#[tauri::command]
-async fn refresh(state: tauri::State<'_, AppState>) -> Result<Vec<SourceReport>, String> {
-    let path = state.db_path.clone();
-    let refreshing = state.refreshing.clone();
-    if refreshing
+/// One synchronization pass shared by the window, the menu bar and the
+/// background loop. A single `refreshing` flag serializes all of them.
+pub(crate) fn run_refresh(app: &tauri::AppHandle) -> Result<Vec<SourceReport>, String> {
+    let state = app.state::<AppState>();
+    if state
+        .refreshing
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return Err("同步正在进行中".to_string());
     }
+    let _reset = Reset(state.refreshing.clone());
+    let reports = stats::refresh(&db::open(&state.db_path)?)?;
+    tray::update(app, &state.db_path, state.tray_title.load(Ordering::Relaxed));
+    let _ = app.emit("usage-refreshed", ());
+    Ok(reports)
+}
+
+// Commands must yield before doing filesystem or SQLite work: synchronous
+// Tauri commands execute on the window thread.
+#[tauri::command]
+async fn refresh(app: tauri::AppHandle) -> Result<Vec<SourceReport>, String> {
+    tauri::async_runtime::spawn_blocking(move || run_refresh(&app))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn daily_totals(
+    state: tauri::State<'_, AppState>,
+    days: i64,
+    app: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<Vec<DayTotal>, String> {
+    let path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _reset = Reset(refreshing);
-        let conn = db::open(&path)?;
-        stats::refresh(&conn)
+        let conn = db::open_reader(&path)?;
+        stats::daily_totals(
+            &conn,
+            days,
+            app.as_deref().unwrap_or(""),
+            provider.as_deref().unwrap_or(""),
+            model.as_deref().unwrap_or(""),
+        )
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+/// Menu-bar and window behavior chosen in Settings. The frontend owns the
+/// stored preference and pushes it here at startup and on every change.
+#[tauri::command]
+fn set_tray_prefs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    show_title: bool,
+    close_to_tray: bool,
+) {
+    state.tray_title.store(show_title, Ordering::Relaxed);
+    state.close_to_tray.store(close_to_tray, Ordering::Relaxed);
+    tray::update(&app, &state.db_path, show_title);
 }
 
 #[tauri::command]
@@ -340,7 +395,7 @@ async fn overview(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -358,12 +413,42 @@ pub fn run() {
                 db_path: dir.join("tokenlens.sqlite"),
                 editor_memories: Arc::new(Mutex::new(editor_memory::Index::default())),
                 refreshing: Arc::new(AtomicBool::new(false)),
+                tray_title: Arc::new(AtomicBool::new(true)),
+                close_to_tray: Arc::new(AtomicBool::new(false)),
+            });
+            tray::setup(app.handle())?;
+            let state = app.state::<AppState>();
+            tray::update(app.handle(), &state.db_path, true);
+            // While the window is hidden in the menu bar the webview is not
+            // driving auto-refresh, so keep usage fresh from here.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(60));
+                let state = handle.state::<AppState>();
+                let hidden = handle
+                    .get_webview_window("main")
+                    .and_then(|window| window.is_visible().ok())
+                    .is_some_and(|visible| !visible);
+                if hidden && state.close_to_tray.load(Ordering::Relaxed) {
+                    let _ = run_refresh(&handle);
+                }
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                if window.label() == "main" && state.close_to_tray.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             refresh,
             overview,
+            daily_totals,
+            set_tray_prefs,
             export_usage,
             clear_usage,
             list_projects,
@@ -381,6 +466,19 @@ pub fn run() {
             apply_editor_sync,
             undo_editor_sync
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app, event| {
+        // Clicking the Dock icon should bring a window hidden in the menu bar back.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            tray::show_main_window(app);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }

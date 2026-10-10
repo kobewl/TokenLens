@@ -11,13 +11,23 @@ npm install
 npm run tauri dev
 ```
 
-The window reads available ZCode, Codex, Claude Code, Gemini CLI, and Cursor usage on this machine. It stores only usage metadata in its own SQLite file. It does not estimate cost, and it does not copy prompts or API keys. The dashboard shows a source coverage list because some installed apps do not expose verifiable per-request token counts locally.
+The window reads available ZCode, Codex, Claude Code, Gemini CLI, and Cursor usage on this machine. It stores only usage metadata in its own SQLite file and does not copy prompts or API keys. A source coverage list is shown because some installed apps do not expose verifiable per-request token counts locally.
 
 Statistics use local calendar days. ZCode history already observed by TokenLens is retained when ZCode rotates its own database. Repeated Codex cumulative notifications are ignored. Cursor calls without a reliable timestamp appear only under **All**, and Cursor context size alone is never counted as usage. Local logs may still differ from provider billing records.
 
-## Status
+## What you get
 
-The first screen automatically discovers native editor memory sources, listed separately with explicit viewing, aggregation and synchronization actions. A separate project workspace has a persistent navigation sidebar, a project switcher, the latest handoff, next steps, tool coverage, and a compact all-time usage summary. Select a project to copy its current brief, write a handoff, or generate tool connection settings. The tool directory, project memory, and usage statistics have dedicated navigation entries. Light, dark, and system themes are supported. The usage page provides provider / model / date filters, summary cards, and an hourly or daily bar chart. Switch the chart between requests and Tokens, expand input / output / cache / reasoning metrics, and inspect the latest 200 request metadata records in pages of 10. Provider, model, and project tabs show aggregate usage. Collection and queries run on background workers so synchronization does not block the window. Unchanged Codex files and ZCode / Cursor databases reuse cached usage metadata, and unchanged rows are not rewritten. Source coverage and appearance settings open from the sidebar; automatic refresh can run every 30 or 60 seconds, or be disabled. Empty selections show a single compact message. Only apps with collected usage appear in quick navigation; source coverage remains available for all detected apps. Zero-valued extra metrics and entire zero-valued token columns are hidden, as are cost and speed until verifiable data is collected. Browser previews show empty states; real local usage is available in the desktop app. Design notes live outside the git tree, on the maintainer's machine.
+- **Overview** (the default screen): today's Tokens and requests compared with yesterday, a 7-day total, a 14-day stacked trend by model, today's share by tool, a 26-week activity heatmap, the latest project handoff with a one-click brief copy, and a few insights generated from your own records (most-used tool, busiest hour, cache hit rate, streak).
+- **Usage**: tool chips, provider / model filters and today / 7 / 30 days / all ranges; a token composition bar; a stacked trend chart; and tabs for the request log, models, tools, providers and projects. Metadata can be exported to JSON.
+- **Tools & sources**: every supported CLI / IDE / desktop tool with its collection status, all-time usage and a shortcut into usage or memory. A catalog entry does not mean the tool is installed.
+- **Project handoff** and **Editor memory**: see the sections below.
+- **Menu bar** (macOS): shows today's Tokens next to the icon; the menu lists the most-used tools and offers sync, open and quit. The number comes from the same query as the Overview. Optionally keep running in the menu bar after the window is closed, syncing once a minute.
+- **Estimated cost**: TokenLens ships **no price list**. Enter per-million-token prices for the models you use in **Settings → Estimated pricing**; models without a price show "unpriced" instead of a guess.
+- **Command palette** (`⌘K`) and shortcuts: `⌘1`–`⌘5` switch pages, `⌘,` opens settings, `⌘R` syncs.
+- Light, dark, and system appearance; a collapsible sidebar; plain toast feedback instead of persistent banners.
+- Browser previews (`npm run dev`) show clearly labeled **fictional demo data**; the desktop app shows your real local usage.
+
+Collection and queries run on background workers so synchronization does not block the window. Unchanged Codex files and ZCode / Cursor databases reuse cached usage metadata, and unchanged rows are not rewritten. Automatic refresh can run every 30 seconds, 1 or 5 minutes, or be turned off. Zero-valued extra metrics and token columns are hidden. Design notes live outside the git tree, on the maintainer's machine.
 
 ## Native editor memory
 
@@ -27,7 +37,7 @@ A single original memory or a manual aggregate can be synchronized to a discover
 
 ## AI tool workspace and project memory
 
-**Tool overview** brings CLI, IDE, and desktop tools into one directory, alongside actual collector coverage and all-time usage. A catalog entry does not imply the app is installed or its MCP connection is verified. **Usage statistics** retains the existing filters and charts.
+**Tools & sources** brings CLI, IDE, and desktop tools into one directory, alongside actual collector coverage and all-time usage. A catalog entry does not imply the app is installed or its MCP connection is verified.
 
 **Project memory** adds explicitly selected project directories to a local registry. The first handoff, decision, or view rebuild creates `.memory/baton.db` in that project. The store uses the Baton schema v1 from the supplied design documents: immutable handoff events, decisions with `active` / `superseded` history, and schema-version checks. Chinese keyword searches treat `%` and `_` as literal characters. The UI displays the latest 50 handoffs and decision history; current briefs include effective decisions. Native editor memory is indexed in its separate UI and never automatically imported into this handoff store. Conversation bodies are not imported.
 
@@ -47,13 +57,13 @@ Memory records contain explicitly authored summaries and rationale, not usage me
 
 **Settings → Check updates** checks the stable GitHub Release channel, shows release notes, downloads a signed update after confirmation, and offers an explicit restart when installation completes. Startup checks are optional and show a quiet notice rather than interrupting work. A dismissed version can always be checked manually. Errors never claim that the app is up to date. **What's new** remains available in Settings.
 
-A version tag triggers a two-architecture release build. Publication waits for both packages and verifies their signatures and signed version against the embedded public key before uploading the complete release and `latest.json`. Actions needs the matching `TAURI_SIGNING_PRIVATE_KEY` repository secret. Updater authentication is separate from Apple signing and notarization. See [release setup and versioning](docs/RELEASING.md) for activation, tagging, and packaging instructions. Install version 0.3.0 manually once to update older versions that do not include the updater.
+A version tag triggers a two-architecture release build. Publication waits for both packages and verifies their signatures and signed version against the embedded public key before uploading the complete release and `latest.json`. Actions needs the matching `TAURI_SIGNING_PRIVATE_KEY` repository secret. Updater authentication is separate from Apple signing and notarization. See [release setup and versioning](docs/RELEASING.md) for activation, tagging, and packaging instructions. Install version 0.3.0 or later manually once to update older versions that do not include the updater.
 
 ## Data management
 
-**Export metadata** saves the complete current app / provider / model / date selection to a JSON file through the native save dialog. The latest-200 display limit does not apply to export. Exports above 100,000 records are rejected so you can narrow the selection. The file contains only the same usage metadata stored in TokenLens; it does not contain prompts, responses, or credentials.
+**Usage → Export** saves the complete current app / provider / model / date selection to a JSON file through the native save dialog. The latest-200 display limit does not apply to export. Exports above 100,000 records are rejected so you can narrow the selection. The file contains only the same usage metadata stored in TokenLens; it does not contain prompts, responses, or credentials.
 
-**Settings → Clear usage** removes TokenLens's local usage history after confirmation and turns automatic refresh off. Original app logs and appearance preferences remain intact. Syncing again reimports available source records. Automatic refresh and appearance preferences persist between launches.
+**Settings → Data management → Clear usage** removes TokenLens's local usage history after confirmation, turns automatic refresh off and resets the menu bar number. Original app logs, project memory and appearance preferences remain intact. Syncing again reimports available source records. Automatic refresh and appearance preferences persist between launches.
 
 Claude Code project attribution uses each record's working directory when available, preserving names that contain hyphens. JSONL discovery does not follow nested symbolic links; unreadable directories, excessive depth / file count, and files above 128 MiB report a source error and preserve the previous snapshot.
 

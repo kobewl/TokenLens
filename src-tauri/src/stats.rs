@@ -10,9 +10,59 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 
 use crate::model::{
-    from_additive_input, from_inclusive_input, NamedTotal, Overview, RequestLog, SeriesPoint,
-    SourceReport, UsageEvent,
+    from_additive_input, from_inclusive_input, DayTotal, NamedTotal, Overview, RequestLog,
+    SeriesPoint, SourceReport, UsageEvent,
 };
+
+/// Per-day totals for the last `days` local calendar days (today included).
+/// Uses the same filters and local-day boundaries as [`overview`], so the
+/// heatmap, period comparisons and the menu bar agree with the dashboard.
+pub fn daily_totals(
+    conn: &Connection,
+    days: i64,
+    app_filter: &str,
+    provider_filter: &str,
+    model_filter: &str,
+) -> Result<Vec<DayTotal>, String> {
+    let days = days.clamp(1, 730);
+    let now = Local::now();
+    let start = local_day_start(now.date_naive() - Duration::days(days - 1))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT strftime('%Y-%m-%d', timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,
+            SUM(total_tokens), COUNT(*), SUM(fresh_input), SUM(output_tokens),
+            SUM(cache_read_tokens), SUM(cache_write_tokens)
+            FROM usage_events
+            WHERE timestamp_ms >= ?1 AND timestamp_ms <= ?2
+              AND (?3 = '' OR app = ?3) AND (?4 = '' OR provider = ?4) AND (?5 = '' OR model = ?5)
+            GROUP BY day ORDER BY day",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![
+                start,
+                now.timestamp_millis(),
+                application_name(app_filter),
+                provider_filter,
+                model_filter
+            ],
+            |row| {
+                Ok(DayTotal {
+                    day: row.get(0)?,
+                    total_tokens: row.get(1)?,
+                    event_count: row.get(2)?,
+                    fresh_input: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    cache_read_tokens: row.get(5)?,
+                    cache_write_tokens: row.get(6)?,
+                })
+            },
+        )
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
 
 pub fn refresh(conn: &Connection) -> Result<Vec<SourceReport>, String> {
     let zcode = collect_zcode();
