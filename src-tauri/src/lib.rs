@@ -319,7 +319,11 @@ pub(crate) fn run_refresh(app: &tauri::AppHandle) -> Result<Vec<SourceReport>, S
     }
     let _reset = Reset(state.refreshing.clone());
     let reports = stats::refresh(&db::open(&state.db_path)?)?;
-    tray::update(app, &state.db_path, state.tray_title.load(Ordering::Relaxed));
+    tray::update(
+        app,
+        &state.db_path,
+        state.tray_title.load(Ordering::Relaxed),
+    );
     let _ = app.emit("usage-refreshed", ());
     Ok(reports)
 }
